@@ -634,7 +634,9 @@ func (client *Client) processEvent(event *Event, hint *EventHint, scope EventMod
 		}
 	}
 
-	client.Transport.SendEvent(event)
+	if client.Transport.SendEvent(event) != nil {
+		return nil
+	}
 
 	return &event.EventID
 }

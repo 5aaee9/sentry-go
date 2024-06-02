@@ -34,7 +34,7 @@ const maxDrainResponseBytes = 16 << 10
 type Transport interface {
 	Flush(timeout time.Duration) bool
 	Configure(options ClientOptions)
-	SendEvent(event *Event)
+	SendEvent(event *Event) error
 }
 
 func getProxyConfig(options ClientOptions) func(*http.Request) (*url.URL, error) {
@@ -405,8 +405,9 @@ func (t *HTTPTransport) Configure(options ClientOptions) {
 }
 
 // SendEvent assembles a new packet out of Event and sends it to the remote server.
-func (t *HTTPTransport) SendEvent(event *Event) {
+func (t *HTTPTransport) SendEvent(event *Event) error {
 	t.SendEventWithContext(context.Background(), event)
+	return nil
 }
 
 // SendEventWithContext assembles a new packet out of Event and sends it to the remote server.
@@ -640,23 +641,23 @@ func (t *HTTPSyncTransport) Configure(options ClientOptions) {
 }
 
 // SendEvent assembles a new packet out of Event and sends it to the remote server.
-func (t *HTTPSyncTransport) SendEvent(event *Event) {
-	t.SendEventWithContext(context.Background(), event)
+func (t *HTTPSyncTransport) SendEvent(event *Event) error {
+	return t.SendEventWithContext(context.Background(), event)
 }
 
 // SendEventWithContext assembles a new packet out of Event and sends it to the remote server.
-func (t *HTTPSyncTransport) SendEventWithContext(ctx context.Context, event *Event) {
+func (t *HTTPSyncTransport) SendEventWithContext(ctx context.Context, event *Event) error {
 	if t.dsn == nil {
-		return
+		return errors.New("dns empty")
 	}
 
 	if t.disabled(categoryFor(event.Type)) {
-		return
+		return errors.New("category disabled")
 	}
 
 	request, err := getRequestFromEvent(ctx, event, t.dsn)
 	if err != nil {
-		return
+		return errors.New("could not get request from event")
 	}
 
 	var eventType string
@@ -679,9 +680,12 @@ func (t *HTTPSyncTransport) SendEventWithContext(ctx context.Context, event *Eve
 	response, err := t.client.Do(request)
 	if err != nil {
 		Logger.Printf("There was an issue with sending an event: %v", err)
-		return
+		return err
 	}
+
+	err = nil
 	if response.StatusCode >= 400 && response.StatusCode <= 599 {
+		err = errors.New("sentry status error")
 		b, err := io.ReadAll(response.Body)
 		if err != nil {
 			Logger.Printf("Error while reading response code: %v", err)
@@ -697,6 +701,8 @@ func (t *HTTPSyncTransport) SendEventWithContext(ctx context.Context, event *Eve
 	// transport to reuse TCP connections.
 	_, _ = io.CopyN(io.Discard, response.Body, maxDrainResponseBytes)
 	response.Body.Close()
+
+	return err
 }
 
 // Flush is a no-op for HTTPSyncTransport. It always returns true immediately.
@@ -728,8 +734,10 @@ func (noopTransport) Configure(ClientOptions) {
 	Logger.Println("Sentry client initialized with an empty DSN. Using noopTransport. No events will be delivered.")
 }
 
-func (noopTransport) SendEvent(*Event) {
+func (noopTransport) SendEvent(*Event) error {
 	Logger.Println("Event dropped due to noopTransport usage.")
+
+	return errors.New("dropped due to noop trnasport")
 }
 
 func (noopTransport) Flush(time.Duration) bool {
